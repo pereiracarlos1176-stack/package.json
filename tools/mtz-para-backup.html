@@ -137,6 +137,14 @@ details[open] summary { margin-bottom: 8px; }
     <button id="go" disabled>Converter</button>
   </section>
 
+  <section class="step" id="icons-step">
+    <h2><span class="n">EXTRA</span>Só o pacote de ícones</h2>
+    <p class="note">Basta escolher o tema (.mtz) no passo 2. Tira as imagens dos ícones para um ZIP, uma por app, com o nome do pacote da app (por exemplo <code>com.android.chrome.png</code>).</p>
+    <button id="icons" type="button" disabled>Extrair ícones</button>
+    <div id="iconstatus" class="msg info" hidden></div>
+    <button id="iconsave" type="button" hidden>Guardar ZIP dos ícones</button>
+  </section>
+
   <section class="step" id="out">
     <h2><span class="n">PASSO 3</span>Resultado e restauro</h2>
     <div id="status" class="msg info">Escolhe o tema e o backup modelo para começar.</div>
@@ -177,6 +185,8 @@ details[open] summary { margin-bottom: 8px; }
       state.result = null;
       $("save").hidden = true;
       $("go").disabled = !(state.mtz && state.bak);
+      $("icons").disabled = !state.mtz;
+      state.icons = null; $("iconsave").hidden = true;
     });
   }
   $("copy").addEventListener("click", () => {
@@ -671,22 +681,71 @@ details[open] summary { margin-bottom: 8px; }
     $("save").hidden = false;
   }
 
-  $("save").addEventListener("click", async () => {
-    const r = state.result; if (!r || !r.ok) return;
+  async function saveBlob(blob, filename, onError) {
     let downloads = null;
     try { downloads = window.claude && window.claude.use ? await window.claude.use("downloads") : null; } catch { downloads = null; }
     if (downloads) {
-      try { await downloads.save({ filename: r.zipName, data: r.blob }); }
+      try { await downloads.save({ filename, data: blob }); }
       catch (e) {
         if (e && e.code === "declined") return;
-        setStatus("bad", "Não foi possível guardar o ficheiro aqui (" + esc(e && e.code || "erro") + "). Tenta abrir esta página no browser.");
+        onError("Não foi possível guardar o ficheiro aqui (" + esc(e && e.code || "erro") + "). Tenta abrir esta página no browser.");
       }
       return;
     }
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(r.blob); a.download = r.zipName;
+    a.href = URL.createObjectURL(blob); a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
+  $("save").addEventListener("click", () => {
+    const r = state.result; if (!r || !r.ok) return;
+    saveBlob(r.blob, r.zipName, (m) => setStatus("bad", m));
+  });
+
+  // ---------- Só os ícones ----------
+  // A parte "icons" do .mtz é outro ZIP: res/drawable-<densidade>/<pacote>.png, às vezes com pastas extra
+  // (ícones animados, máscaras). Fica a imagem de maior densidade de cada app; o resto vai para "outros/".
+  const DENSITY = { xxxhdpi: 5, xxhdpi: 4, xhdpi: 3, hdpi: 2, mdpi: 1 };
+  function iconStatus(kind, html) { const s = $("iconstatus"); s.hidden = false; s.className = "msg " + kind; s.innerHTML = html; }
+
+  $("icons").addEventListener("click", async () => {
+    const btn = $("icons");
+    btn.disabled = true; btn.textContent = "A extrair…"; $("iconsave").hidden = true;
+    try {
+      if (typeof JSZip === "undefined") throw new Error("Não foi possível carregar a biblioteca de ZIP. Verifica a ligação à internet e recarrega a página.");
+      const mtz = await readMtz(state.mtz);
+      if (!mtz.info) throw new Error("O ficheiro do tema não é um .mtz válido (um .mtz é um ZIP).");
+      const entry = mtz.info.zip.file(/^icons$/i)[0];
+      if (!entry) throw new Error("Este tema não tem pacote de ícones (falta a parte «icons» no .mtz).");
+      const inner = await JSZip.loadAsync(await entry.async("uint8array"));
+      const best = new Map(), others = [];
+      for (const f of Object.values(inner.files)) {
+        if (f.dir || !/\.(png|webp|jpe?g)$/i.test(f.name)) continue;
+        const m = f.name.match(/^res\/drawable(?:-[a-z]+)*?(?:-(x{0,3}hdpi|mdpi))?(?:-[a-z0-9]+)*\/([^/]+)$/i);
+        if (m) {
+          const rank = DENSITY[(m[1] || "").toLowerCase()] || 0, cur = best.get(m[2]);
+          if (!cur || rank > cur.rank) best.set(m[2], { rank, f });
+        } else others.push(f);
+      }
+      if (!best.size && !others.length) throw new Error("Não encontrei imagens dentro do pacote de ícones.");
+      const files = [];
+      for (const [name, { f }] of [...best].sort((a, b) => a[0].localeCompare(b[0]))) files.push({ name: "icones/" + name, blob: new Blob([await f.async("uint8array")]) });
+      for (const f of others) files.push({ name: "outros/" + f.name, blob: new Blob([await f.async("uint8array")]) });
+      const blob = await zipStore(files);
+      const base = (mtz.info.title || state.mtz.name.replace(/\.mtz$/i, "")).replace(/[\\/:*?"<>|]/g, "_");
+      state.icons = { blob, name: `icones-${base}.zip` };
+      iconStatus("ok", `Extraí ${best.size} ícones de apps` + (others.length ? ` e ${others.length} imagens extra (ícones animados, máscaras) na pasta <code>outros</code>` : "") + `. ZIP: ${fmt(blob.size)}.`);
+      $("iconsave").hidden = false;
+    } catch (err) {
+      iconStatus("bad", esc(err.message || err));
+    } finally {
+      btn.disabled = !state.mtz; btn.textContent = "Extrair ícones";
+    }
+  });
+
+  $("iconsave").addEventListener("click", () => {
+    if (state.icons) saveBlob(state.icons.blob, state.icons.name, (m) => iconStatus("bad", m));
   });
 })();
 </script>
