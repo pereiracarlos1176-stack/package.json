@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+</head>
+<body>
+<title>MTZ para Backup</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: uma coluna estreita, tipo app de telemóvel; três passos numerados porque a ordem importa. */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --ink: #16191f;
+  --muted: #5c6370;
+  --line: #dde1e7;
+  --accent: #b5530c;
+  --accent-ink: #ffffff;
+  --accent-soft: #fbeee3;
+  --ok: #1f7a4d;
+  --ok-soft: #e3f3ea;
+  --bad: #b3261e;
+  --bad-soft: #fbe7e5;
+  --code-bg: #eef0f4;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Manrope", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111318; --surface: #1a1d24; --ink: #eceef2; --muted: #9aa1ad; --line: #2c313b;
+    --accent: #f0a04b; --accent-ink: #1a1206; --accent-soft: #3a2614;
+    --ok: #6fd3a0; --ok-soft: #173326; --bad: #ff8a80; --bad-soft: #3a1a18; --code-bg: #232731;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111318; --surface: #1a1d24; --ink: #eceef2; --muted: #9aa1ad; --line: #2c313b;
+  --accent: #f0a04b; --accent-ink: #1a1206; --accent-soft: #3a2614;
+  --ok: #6fd3a0; --ok-soft: #173326; --bad: #ff8a80; --bad-soft: #3a1a18; --code-bg: #232731;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.55; }
+.wrap {
+  max-width: 640px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 28px 56px;
+  display: flex; flex-direction: column; gap: 20px;
+}
+header h1 { font-family: var(--f-display); font-size: 2rem; line-height: 1.1; margin: 0 0 8px; text-wrap: balance; letter-spacing: -0.01em; }
+header h1 span { color: var(--accent); }
+header p { margin: 0; color: var(--muted); max-width: 60ch; }
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.step h2 { font-family: var(--f-display); font-size: 1.15rem; margin: 0; display: flex; gap: 10px; align-items: baseline; }
+.step h2 .n { font-family: var(--f-mono); font-size: 0.8rem; color: var(--accent); letter-spacing: 0.04em; }
+.step p, .step ol { margin: 0; }
+.step ol { padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.note { font-size: 0.88rem; color: var(--muted); }
+code, .mono { font-family: var(--f-mono); font-size: 0.85em; background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-weight: 600; font-size: 0.92rem; }
+.field label small { font-weight: 500; color: var(--muted); }
+.drop { position: relative; border: 1.5px dashed var(--line); border-radius: 10px; padding: 12px 14px; display: flex; align-items: center; gap: 12px; background: var(--bg); }
+.drop:focus-within { border-color: var(--accent); }
+.drop.has { border-style: solid; border-color: var(--ok); background: var(--ok-soft); }
+.drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+.drop .ext { font-family: var(--f-mono); font-size: 0.75rem; font-weight: 500; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 7px; flex: none; }
+.drop .fname { min-width: 0; overflow-wrap: anywhere; font-size: 0.92rem; }
+.drop .fname em { font-style: normal; color: var(--muted); }
+input[type="text"] { font: inherit; font-family: var(--f-mono); font-size: 0.9rem; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); width: 100%; box-sizing: border-box; }
+input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { font: inherit; font-weight: 700; border: 0; border-radius: 10px; padding: 13px 18px; background: var(--accent); color: var(--accent-ink); cursor: pointer; }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+.tree { font-family: var(--f-mono); font-size: 0.8rem; background: var(--code-bg); border-radius: 8px; padding: 12px; margin: 0; overflow-x: auto; white-space: pre; line-height: 1.6; }
+.msg { border-radius: 10px; padding: 12px 14px; font-size: 0.92rem; }
+.msg.ok { background: var(--ok-soft); color: var(--ink); border: 1px solid var(--ok); }
+.msg.bad { background: var(--bad-soft); color: var(--ink); border: 1px solid var(--bad); }
+.msg.info { background: var(--accent-soft); color: var(--ink); border: 1px solid var(--accent); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 0.9rem; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.list { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.list table { border-collapse: collapse; width: 100%; font-family: var(--f-mono); font-size: 0.75rem; }
+.list td { padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.list td.sz { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.list tr.hit td { background: var(--accent-soft); font-weight: 500; }
+details summary { cursor: pointer; font-weight: 600; font-size: 0.92rem; }
+details[open] summary { margin-bottom: 8px; }
+@media (prefers-reduced-motion: no-preference) { .drop { transition: border-color .15s, background .15s; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>MTZ para <span>Backup</span></h1>
+    <p>Mete um tema <code>.mtz</code> dentro de um backup da app Temas do MIUI/HyperOS, para o instalares com <em>Backup e restauro</em>. Tudo é feito neste aparelho: os ficheiros não são enviados para lado nenhum.</p>
+  </header>
+
+  <section class="step">
+    <h2><span class="n">PASSO 1</span>Faz um backup modelo no telemóvel</h2>
+    <ol>
+      <li>Na app <strong>Temas</strong>, descarrega e aplica um tema gratuito qualquer da loja.</li>
+      <li>Vai a <strong>Definições → Acerca do telefone → Fazer backup e restaurar → Este dispositivo</strong>.</li>
+      <li>Desmarca tudo e escolhe só a app <strong>Temas</strong> (em Apps). Faz o backup sem palavra-passe.</li>
+      <li>No gestor de ficheiros, abre a pasta do backup:</li>
+    </ol>
+    <pre class="tree">Armazenamento interno/
+└── MIUI/backup/AllBackup/
+    └── 20261029_153012/
+        ├── Temas(com.android.thememanager).bak
+        └── descript.xml</pre>
+    <p class="note">Os nomes e o caminho podem variar um pouco conforme a versão. Esta ferramenta troca o tema que está dentro desse backup pelo teu <code>.mtz</code>, mantendo o resto tal como o teu telemóvel o gerou.</p>
+  </section>
+
+  <section class="step">
+    <h2><span class="n">PASSO 2</span>Escolhe os ficheiros</h2>
+    <div class="field">
+      <label for="f-mtz">Tema <small>(.mtz)</small></label>
+      <div class="drop" id="d-mtz"><span class="ext">.mtz</span><span class="fname"><em>Toca para escolher o tema</em></span><input type="file" id="f-mtz"></div>
+    </div>
+    <div class="field">
+      <label for="f-bak">Backup modelo da app Temas <small>(.bak)</small></label>
+      <div class="drop" id="d-bak"><span class="ext">.bak</span><span class="fname"><em>Toca para escolher o .bak do passo 1</em></span><input type="file" id="f-bak"></div>
+    </div>
+    <div class="field">
+      <label for="f-xml">descript.xml <small>(recomendado)</small></label>
+      <div class="drop" id="d-xml"><span class="ext">.xml</span><span class="fname"><em>Toca para escolher o descript.xml da mesma pasta</em></span><input type="file" id="f-xml"></div>
+    </div>
+    <div class="field">
+      <label for="folder">Nome da pasta do novo backup</label>
+      <input type="text" id="folder" autocomplete="off" spellcheck="false">
+    </div>
+    <button id="go" disabled>Converter</button>
+  </section>
+
+  <section class="step" id="out">
+    <h2><span class="n">PASSO 3</span>Resultado e restauro</h2>
+    <div id="status" class="msg info">Escolhe o tema e o backup modelo para começar.</div>
+    <div id="details" hidden></div>
+    <button id="save" hidden>Guardar ZIP</button>
+    <details>
+      <summary>Como restaurar no telemóvel</summary>
+      <ol>
+        <li>Descompacta o ZIP na raiz do armazenamento interno. Fica uma pasta nova dentro de <code>MIUI/backup/AllBackup/</code>.</li>
+        <li>Abre <strong>Fazer backup e restaurar → Este dispositivo</strong>, escolhe o backup novo e restaura.</li>
+        <li>Abre <strong>Temas → Perfil → Os meus temas</strong>. O tema substitui o que estava no backup modelo; aplica-o daí se não ficar aplicado logo.</li>
+      </ol>
+    </details>
+  </section>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const state = { mtz: null, bak: null, xml: null, result: null };
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const d = new Date();
+  $("folder").value = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+
+  const fmt = (n) => n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(1) + " KB" : (n / 1048576).toFixed(2) + " MB";
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function bindFile(inputId, dropId, key) {
+    $(inputId).addEventListener("change", (e) => {
+      const f = e.target.files[0] || null;
+      state[key] = f;
+      const drop = $(dropId);
+      drop.classList.toggle("has", !!f);
+      if (f) drop.querySelector(".fname").textContent = `${f.name} · ${fmt(f.size)}`;
+      state.result = null;
+      $("save").hidden = true;
+      $("go").disabled = !(state.mtz && state.bak);
+    });
+  }
+  bindFile("f-mtz", "d-mtz", "mtz");
+  bindFile("f-bak", "d-bak", "bak");
+  bindFile("f-xml", "d-xml", "xml");
+
+  // ---------- Formato do .bak ----------
+  // [cabeçalho MIUI em texto] + "ANDROID BACKUP\n<versão>\n<comprimido 0|1>\n<encriptação>\n" + tar (zlib se comprimido)
+
+  function indexOf(buf, needle, from = 0) {
+    outer: for (let i = from; i <= buf.length - needle.length; i++) {
+      for (let j = 0; j < needle.length; j++) if (buf[i + j] !== needle[j]) continue outer;
+      return i;
+    }
+    return -1;
+  }
+
+  function parseBak(bytes) {
+    const magic = indexOf(bytes, enc.encode("ANDROID BACKUP\n"));
+    if (magic < 0) throw new Error("Este ficheiro não parece um backup Android (não encontrei «ANDROID BACKUP»). Confirma que escolheste o .bak e não o descript.xml.");
+    let p = magic;
+    const lines = [];
+    for (let i = 0; i < 4; i++) {
+      const nl = bytes.indexOf(10, p);
+      if (nl < 0) throw new Error("Cabeçalho do backup incompleto.");
+      lines.push(dec.decode(bytes.subarray(p, nl)));
+      p = nl + 1;
+    }
+    const [, version, compressed, encryption] = lines;
+    if (encryption.trim() !== "none") throw new Error("O backup está protegido com palavra-passe. Repete o passo 1 sem palavra-passe.");
+    return {
+      miuiHeader: dec.decode(bytes.subarray(0, magic)).split("\n").filter(Boolean),
+      head: bytes.subarray(0, p),
+      version, compressed: compressed.trim() === "1",
+      payload: bytes.subarray(p),
+    };
+  }
+
+  async function pipe(bytes, stream) {
+    const out = new Blob([bytes]).stream().pipeThrough(stream);
+    return new Uint8Array(await new Response(out).arrayBuffer());
+  }
+
+  // ---------- tar ----------
+  const str = (b, off, len) => { let e = off; while (e < off + len && b[e]) e++; return dec.decode(b.subarray(off, e)); };
+  const octal = (b, off, len) => parseInt(str(b, off, len).trim() || "0", 8);
+
+  function parseTar(tar) {
+    const entries = [];
+    let pos = 0, meta = [], longName = null, end = tar.length;
+    while (pos + 512 <= tar.length) {
+      const h = tar.subarray(pos, pos + 512);
+      if (h.every((x) => x === 0)) { end = pos; break; }
+      const size = octal(h, 124, 12);
+      const type = String.fromCharCode(h[156] || 48);
+      const block = Math.ceil(size / 512) * 512;
+      const raw = tar.subarray(pos, pos + 512 + block);
+      const data = tar.subarray(pos + 512, pos + 512 + size);
+      pos += 512 + block;
+      if (type === "L") { longName = str(data, 0, data.length); meta.push({ raw }); continue; }
+      if (type === "x" || type === "g") {
+        const rec = dec.decode(data);
+        const m = rec.match(/\d+ path=([^\n]*)\n/);
+        if (m) longName = m[1];
+        meta.push({ raw, hasSize: /\d+ size=/.test(rec) });
+        continue;
+      }
+      let name = str(h, 0, 100);
+      const prefix = str(h, 345, 155);
+      if (str(h, 257, 5) === "ustar" && prefix) name = prefix + "/" + name;
+      entries.push({ name: longName || name, type, size, header: h, data, meta });
+      meta = []; longName = null;
+    }
+    return { entries, trailer: tar.subarray(end) };
+  }
+
+  function withData(entry, data) {
+    if (entry.meta.some((m) => m.hasSize)) throw new Error("Formato de tar não suportado (tamanho em cabeçalho PAX).");
+    const h = new Uint8Array(entry.header);
+    const so = data.length.toString(8).padStart(11, "0");
+    if (so.length > 11) throw new Error("O tema é demasiado grande.");
+    h.set(enc.encode(so + "\0"), 124);
+    h.fill(32, 148, 156);
+    let sum = 0; for (const x of h) sum += x;
+    h.set(enc.encode(sum.toString(8).padStart(6, "0") + "\0 "), 148);
+    return { ...entry, header: h, data };
+  }
+
+  function buildTar(entries, trailer) {
+    const parts = [];
+    for (const e of entries) {
+      for (const m of e.meta) parts.push(m.raw);
+      parts.push(e.header, e.data);
+      const padLen = (512 - (e.data.length % 512)) % 512;
+      if (padLen) parts.push(new Uint8Array(padLen));
+    }
+    parts.push(trailer.length ? trailer : new Uint8Array(1024));
+    return concat(parts);
+  }
+
+  function concat(parts) {
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
+    return out;
+  }
+
+  // ---------- MTZ ----------
+  async function readMtz(file) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let info = null;
+    try {
+      const zip = await JSZip.loadAsync(bytes);
+      const desc = zip.file(/(^|\/)description\.xml$/i)[0];
+      const comps = Object.keys(zip.files).filter((n) => !n.includes("/") || /^[^/]+\/$/.test(n)).map((n) => n.replace(/\/$/, ""));
+      info = { comps };
+      if (desc) {
+        const xml = await desc.async("string");
+        const tag = (t) => (xml.match(new RegExp(`<${t}>([^<]*)</${t}>`, "i")) || [])[1] || "";
+        info.title = tag("title"); info.designer = tag("designer") || tag("author"); info.version = tag("version"); info.uiVersion = tag("uiVersion");
+      }
+    } catch { /* não é zip: avisa mais abaixo */ }
+    return { bytes, info };
+  }
+
+  // ---------- Converter ----------
+  $("go").addEventListener("click", async () => {
+    const btn = $("go");
+    btn.disabled = true; btn.textContent = "A converter…";
+    $("save").hidden = true; $("details").hidden = true;
+    try {
+      state.result = await convert();
+      show(state.result);
+    } catch (err) {
+      setStatus("bad", esc(err.message || err));
+    } finally {
+      btn.disabled = !(state.mtz && state.bak); btn.textContent = "Converter";
+    }
+  });
+
+  function setStatus(kind, html) { const s = $("status"); s.className = "msg " + kind; s.innerHTML = html; }
+
+  async function convert() {
+    const folder = $("folder").value.trim().replace(/[\\/:*?"<>|]/g, "_");
+    if (!folder) throw new Error("Dá um nome à pasta do novo backup.");
+    if (typeof JSZip === "undefined") throw new Error("Não foi possível carregar a biblioteca de ZIP. Verifica a ligação à internet e recarrega a página.");
+    const mtz = await readMtz(state.mtz);
+    if (!mtz.info) throw new Error("O ficheiro do tema não é um .mtz válido (um .mtz é um ZIP).");
+
+    const bakBytes = new Uint8Array(await state.bak.arrayBuffer());
+    const bak = parseBak(bakBytes);
+    let tar;
+    try { tar = bak.compressed ? await pipe(bak.payload, new DecompressionStream("deflate")) : bak.payload; }
+    catch { throw new Error("Não consegui descomprimir o backup. Envia-me a lista do passo 3 para eu ajustar a ferramenta."); }
+    const { entries, trailer } = parseTar(tar);
+
+    const hits = entries.filter((e) => /\.mtz$/i.test(e.name) && e.type !== "5");
+    const base = { mtz, bak, entries, hits, folder };
+    if (!hits.length) return { ...base, ok: false };
+
+    const newEntries = entries.map((e) => hits.includes(e) ? withData(e, mtz.bytes) : e);
+    let payload = buildTar(newEntries, trailer);
+    if (bak.compressed) payload = await pipe(payload, new CompressionStream("deflate"));
+    const outBak = concat([bak.head, payload]);
+
+    let xmlText = null, xmlChanged = false;
+    if (state.xml) {
+      xmlText = await state.xml.text();
+      const re = new RegExp(`(^|[^0-9])${bakBytes.length}(?![0-9])`, "g");
+      const replaced = xmlText.replace(re, `$1${outBak.length}`);
+      xmlChanged = replaced !== xmlText; xmlText = replaced;
+    }
+
+    const zip = new JSZip();
+    const dir = zip.folder(`MIUI/backup/AllBackup/${folder}`);
+    dir.file(state.bak.name, outBak);
+    if (xmlText !== null) dir.file(state.xml.name || "descript.xml", xmlText);
+    const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+    return { ...base, ok: true, outBak, xmlText, xmlChanged, blob, zipName: `backup-tema-${folder}.zip` };
+  }
+
+  function show(r) {
+    const i = r.mtz.info;
+    const rows = [
+      ["Tema", esc(i.title || state.mtz.name)],
+      i.designer && ["Autor", esc(i.designer)],
+      i.version && ["Versão", esc(i.version) + (i.uiVersion ? ` · UI ${esc(i.uiVersion)}` : "")],
+      ["Componentes", esc(i.comps.join(", ") || "—")],
+      ["Backup", `formato v${esc(r.bak.version)} · ${r.bak.compressed ? "comprimido" : "sem compressão"} · ${r.entries.length} ficheiros`],
+      r.bak.miuiHeader.length && ["Cabeçalho", `<span class="mono">${esc(r.bak.miuiHeader.join(" | "))}</span>`],
+    ].filter(Boolean);
+    const list = r.entries.map((e) => `<tr class="${r.hits.includes(e) ? "hit" : ""}"><td>${esc(e.name)}</td><td class="sz">${fmt(e.size)}</td></tr>`).join("");
+    $("details").innerHTML = `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
+      <details${r.ok ? "" : " open"}><summary>Conteúdo do backup modelo</summary><div class="list"><table>${list}</table></div></details>`;
+    $("details").hidden = false;
+
+    if (!r.ok) {
+      setStatus("bad", `Não encontrei nenhum ficheiro <code>.mtz</code> dentro do backup modelo, por isso não sei onde pôr o tema. Confirma que tinhas um tema da loja aplicado quando fizeste o backup. Se tinhas, tira um print da lista abaixo e manda-ma para eu ajustar a ferramenta.`);
+      return;
+    }
+    const where = r.hits.map((h) => `<code>${esc(h.name)}</code>`).join(", ");
+    setStatus("ok", `Pronto. Substituí ${r.hits.length > 1 ? r.hits.length + " ficheiros de tema" : "o tema"} (${where}) pelo teu <code>.mtz</code>. Novo .bak: ${fmt(r.outBak.length)}.` +
+      (r.xmlText === null ? `<br>Sem descript.xml: junta-o tu à pasta, copiado do backup modelo.` :
+        r.xmlChanged ? `<br>Atualizei o tamanho no descript.xml.` : ``));
+    $("save").hidden = false;
+  }
+
+  $("save").addEventListener("click", async () => {
+    const r = state.result; if (!r || !r.ok) return;
+    let downloads = null;
+    try { downloads = window.claude && window.claude.use ? await window.claude.use("downloads") : null; } catch { downloads = null; }
+    if (downloads) {
+      try { await downloads.save({ filename: r.zipName, data: r.blob }); }
+      catch (e) {
+        if (e && e.code === "declined") return;
+        setStatus("bad", "Não foi possível guardar o ficheiro aqui (" + esc(e && e.code || "erro") + "). Tenta abrir esta página no browser.");
+      }
+      return;
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(r.blob); a.download = r.zipName;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  });
+})();
+</script>
+
+</body>
+</html>
