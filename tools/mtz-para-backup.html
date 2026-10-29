@@ -407,7 +407,7 @@ details[open] summary { margin-bottom: 8px; }
     catch { throw new Error("Não consegui descomprimir o backup. Envia-me a lista do passo 3 para eu ajustar a ferramenta."); }
     const { entries, trailer } = parseTar(tar);
 
-    const hits = entries.filter((e) => e.type !== "5" && (/\.mtz$/i.test(e.name) || isThemePkg(e.data)));
+    const hits = entries.filter((e) => e.type !== "5" && !e.name.includes("/.data/content/") && (/\.mtz$/i.test(e.name) || isThemePkg(e.data)));
     const base = { mtz, bak, entries, hits, folder };
     let newEntries, hyper = null;
     if (hits.length) {
@@ -530,6 +530,11 @@ details[open] summary { margin-bottom: 8px; }
     for (const e of pick(/sp\/selected_theme_components\.xml$/)) out.push(text(e, 4000));
     const mra = pick(/\.data\/rights\/theme\/[^/]+\.mra$/)[0];
     if (mra) out.push(text(mra, 800));
+    // Textos legíveis da base de dados dos temas (tabelas e ids), para ver se a app guarda uma lista interna.
+    for (const e of pick(/\/db\/theme_database\.db(-wal)?$/)) {
+      const runs = (dec.decode(e.data).match(/[\x20-\x7e]{6,}/g) || []).filter((s, i, a) => a.indexOf(s) === i);
+      out.push(`== ${e.name} (${e.size} B, texto) ==\n` + runs.join("\n").slice(0, 12000));
+    }
     return out.join("\n");
   }
 
