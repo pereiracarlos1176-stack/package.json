@@ -298,7 +298,7 @@ details[open] summary { margin-bottom: 8px; }
       const zip = await JSZip.loadAsync(bytes);
       const desc = zip.file(/(^|\/)description\.xml$/i)[0];
       const comps = Object.keys(zip.files).filter((n) => !n.includes("/") || /^[^/]+\/$/.test(n)).map((n) => n.replace(/\/$/, ""));
-      info = { comps };
+      info = { comps, files: Object.values(zip.files).filter((f) => !f.dir).map((f) => ({ name: f.name, size: f._data && f._data.uncompressedSize })) };
       if (desc) {
         const xml = await desc.async("string");
         const tag = (t) => (xml.match(new RegExp(`<${t}>([^<]*)</${t}>`, "i")) || [])[1] || "";
@@ -371,6 +371,29 @@ details[open] summary { margin-bottom: 8px; }
     return { ...base, ok: true, outBak, xmlText, xmlChanged, blob, zipName: `backup-tema-${folder}.zip` };
   }
 
+  function copyButton(id, text, doneLabel) {
+    $(id).addEventListener("click", () => {
+      const done = () => { $(id).textContent = doneLabel; };
+      const fallback = () => { const ta = document.createElement("textarea"); ta.value = text; ta.rows = 8; ta.style.width = "100%"; ta.readOnly = true; $(id).replaceWith(ta); ta.select(); };
+      try { navigator.clipboard.writeText(text).then(done, fallback); } catch { fallback(); }
+    });
+  }
+
+  // Ficheiros de texto que descrevem como o HyperOS guarda o tema (meta .mrm, componentes escolhidos, direitos .mra).
+  function themeDetails(r) {
+    const out = ["== MTZ =="];
+    for (const f of (r.mtz.info.files || []).slice(0, 150)) out.push(`${f.size ?? "?"} ${f.name}`);
+    const text = (e, max) => `== ${e.name} (${e.size} B) ==\n` + dec.decode(e.data.subarray(0, max));
+    const pick = (re) => r.entries.filter((e) => re.test(e.name));
+    for (const e of pick(/\.data\/meta\/theme\/[^/]+\.mrm$/)) out.push(text(e, 20000));
+    const icons = pick(/\.data\/meta\/icons\/[^/]+\.mrm$/).sort((a, b) => b.size - a.size)[0];
+    if (icons) out.push(text(icons, 10000));
+    for (const e of pick(/sp\/selected_theme_components\.xml$/)) out.push(text(e, 4000));
+    const mra = pick(/\.data\/rights\/theme\/[^/]+\.mra$/)[0];
+    if (mra) out.push(text(mra, 800));
+    return out.join("\n");
+  }
+
   function show(r) {
     const i = r.mtz.info;
     const rows = [
@@ -387,12 +410,10 @@ details[open] summary { margin-bottom: 8px; }
     const list = sorted.map((e) => `<tr class="${r.hits.includes(e) ? "hit" : ""}"><td>${esc(e.name)}</td><td class="sz">${fmt(e.size)}</td></tr>`).join("");
     $("details").innerHTML = `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
       <details${r.ok ? "" : " open"}><summary>Conteúdo do backup modelo (maiores primeiro)</summary><div class="list"><table>${list}</table></div></details>
-      <button type="button" id="copylist">Copiar lista em texto</button>`;
-    $("copylist").addEventListener("click", () => {
-      const done = () => { $("copylist").textContent = "Lista copiada"; };
-      const fallback = () => { const ta = document.createElement("textarea"); ta.value = r.listText; ta.rows = 8; ta.style.width = "100%"; ta.readOnly = true; $("copylist").replaceWith(ta); ta.select(); };
-      try { navigator.clipboard.writeText(r.listText).then(done, fallback); } catch { fallback(); }
-    });
+      <button type="button" id="copylist">Copiar lista em texto</button>
+      <button type="button" id="copyinfo">Copiar detalhes do tema</button>`;
+    copyButton("copylist", r.listText, "Lista copiada");
+    copyButton("copyinfo", themeDetails(r), "Detalhes copiados");
     $("details").hidden = false;
 
     if (!r.ok) {
