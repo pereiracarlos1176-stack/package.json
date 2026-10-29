@@ -308,6 +308,13 @@ details[open] summary { margin-bottom: 8px; }
     return { bytes, info };
   }
 
+  // Um tema é um ZIP com description.xml; o nome do ficheiro dentro do backup pode não acabar em .mtz.
+  const PK = enc.encode("PK\x03\x04"), DESC = enc.encode("description.xml");
+  function isThemePkg(data) {
+    if (data.length < 1024 || PK.some((x, i) => data[i] !== x)) return false;
+    return indexOf(data.subarray(Math.max(0, data.length - 1048576)), DESC) >= 0;
+  }
+
   // ---------- Converter ----------
   $("go").addEventListener("click", async () => {
     const btn = $("go");
@@ -339,7 +346,7 @@ details[open] summary { margin-bottom: 8px; }
     catch { throw new Error("Não consegui descomprimir o backup. Envia-me a lista do passo 3 para eu ajustar a ferramenta."); }
     const { entries, trailer } = parseTar(tar);
 
-    const hits = entries.filter((e) => /\.mtz$/i.test(e.name) && e.type !== "5");
+    const hits = entries.filter((e) => e.type !== "5" && (/\.mtz$/i.test(e.name) || isThemePkg(e.data)));
     const base = { mtz, bak, entries, hits, folder };
     if (!hits.length) return { ...base, ok: false };
 
@@ -374,13 +381,22 @@ details[open] summary { margin-bottom: 8px; }
       ["Backup", `formato v${esc(r.bak.version)} · ${r.bak.compressed ? "comprimido" : "sem compressão"} · ${r.entries.length} ficheiros`],
       r.bak.miuiHeader.length && ["Cabeçalho", `<span class="mono">${esc(r.bak.miuiHeader.join(" | "))}</span>`],
     ].filter(Boolean);
-    const list = r.entries.map((e) => `<tr class="${r.hits.includes(e) ? "hit" : ""}"><td>${esc(e.name)}</td><td class="sz">${fmt(e.size)}</td></tr>`).join("");
+    const sorted = [...r.entries].sort((a, b) => b.size - a.size);
+    r.listText = [`backup v${r.bak.version} ${r.bak.compressed ? "comprimido" : "sem compressão"}, ${r.entries.length} ficheiros`, ...r.bak.miuiHeader.map((l) => "# " + l),
+      ...sorted.slice(0, 300).map((e) => `${e.type} ${fmt(e.size)} ${e.name}${e.data.length >= 4 ? " [" + Array.from(e.data.subarray(0, 4), (x) => x.toString(16).padStart(2, "0")).join("") + "]" : ""}`)].join("\n");
+    const list = sorted.map((e) => `<tr class="${r.hits.includes(e) ? "hit" : ""}"><td>${esc(e.name)}</td><td class="sz">${fmt(e.size)}</td></tr>`).join("");
     $("details").innerHTML = `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
-      <details${r.ok ? "" : " open"}><summary>Conteúdo do backup modelo</summary><div class="list"><table>${list}</table></div></details>`;
+      <details${r.ok ? "" : " open"}><summary>Conteúdo do backup modelo (maiores primeiro)</summary><div class="list"><table>${list}</table></div></details>
+      <button type="button" id="copylist">Copiar lista em texto</button>`;
+    $("copylist").addEventListener("click", () => {
+      const done = () => { $("copylist").textContent = "Lista copiada"; };
+      const fallback = () => { const ta = document.createElement("textarea"); ta.value = r.listText; ta.rows = 8; ta.style.width = "100%"; ta.readOnly = true; $("copylist").replaceWith(ta); ta.select(); };
+      try { navigator.clipboard.writeText(r.listText).then(done, fallback); } catch { fallback(); }
+    });
     $("details").hidden = false;
 
     if (!r.ok) {
-      setStatus("bad", `Não encontrei nenhum ficheiro <code>.mtz</code> dentro do backup modelo, por isso não sei onde pôr o tema. Confirma que tinhas um tema da loja aplicado quando fizeste o backup. Se tinhas, tira um print da lista abaixo e manda-ma para eu ajustar a ferramenta.`);
+      setStatus("bad", `Não encontrei nenhum ficheiro <code>.mtz</code> dentro do backup modelo, por isso não sei onde pôr o tema. Confirma que tinhas um tema da loja aplicado quando fizeste o backup. Se tinhas, carrega em <strong>Copiar lista em texto</strong> e cola-a na conversa com o Claude para eu ajustar a ferramenta.`);
       return;
     }
     const where = r.hits.map((h) => `<code>${esc(h.name)}</code>`).join(", ");
