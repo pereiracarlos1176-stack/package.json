@@ -117,6 +117,7 @@ details[open] summary { margin-bottom: 8px; }
 
   <section class="step">
     <h2><span class="n">PASSO 2</span>Escolhe os ficheiros</h2>
+    <p class="note">Se ao tocar não abrir o seletor de ficheiros, estás a ver esta página dentro da app Claude, que no Android não deixa escolher ficheiros. Abre-a no Chrome: <span class="mono" id="link">https://claude.ai/artifact/4p5yWM6WtGPL97QyQk1SCW</span> <button type="button" id="copy" style="padding:4px 10px;font-size:0.8rem">Copiar link</button></p>
     <div class="field">
       <label for="f-mtz">Tema <small>(.mtz)</small></label>
       <div class="drop" id="d-mtz"><span class="ext">.mtz</span><span class="fname"><em>Toca para escolher o tema</em></span><input type="file" id="f-mtz"></div>
@@ -178,6 +179,13 @@ details[open] summary { margin-bottom: 8px; }
       $("go").disabled = !(state.mtz && state.bak);
     });
   }
+  $("copy").addEventListener("click", () => {
+    const t = $("link").textContent;
+    const done = () => { $("copy").textContent = "Copiado"; };
+    try {
+      navigator.clipboard.writeText(t).then(done, () => window.getSelection().selectAllChildren($("link")));
+    } catch { window.getSelection().selectAllChildren($("link")); }
+  });
   bindFile("f-mtz", "d-mtz", "mtz");
   bindFile("f-bak", "d-bak", "bak");
   bindFile("f-xml", "d-xml", "xml");
