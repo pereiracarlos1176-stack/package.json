@@ -457,7 +457,8 @@ details[open] summary { margin-bottom: 8px; }
 
     const info = mtz.info, zip = info.zip;
     const themeId = crypto.randomUUID();
-    const platform = parseInt(info.uiVersion, 10) || themeTpl.platform;
+    // Usa a plataforma do tema da loja que já está no telemóvel; um número diferente pode esconder o tema como incompatível.
+    const platform = themeTpl.platform || parseInt(info.uiVersion, 10);
     const title = info.title || state.mtz.name.replace(/\.mtz$/i, "");
     const author = info.author || info.designer || "";
     const L = (v) => ({ fallback: v, pt_PT: v });
@@ -565,7 +566,7 @@ details[open] summary { margin-bottom: 8px; }
       return;
     }
     const done = r.hyper
-      ? `Pronto. Acrescentei o tema «${esc(r.hyper.title)}» ao backup no formato do HyperOS, com ${r.hyper.parts.length} partes (${r.hyper.parts.map((p) => esc(p.code)).join(", ")}) e ${r.hyper.previews.length} imagens de pré-visualização. Os temas que já lá estavam ficam como estavam.` +
+      ? `Pronto. Acrescentei o tema «${esc(r.hyper.title)}» (id <code>${esc(r.hyper.themeId.slice(0, 8))}</code>) ao backup no formato do HyperOS, com ${r.hyper.parts.length} partes (${r.hyper.parts.map((p) => esc(p.code)).join(", ")}) e ${r.hyper.previews.length} imagens de pré-visualização. Os temas que já lá estavam ficam como estavam.` +
         (r.hyper.skipped.length ? `<br>Não incluí: ${r.hyper.skipped.map(esc).join(", ")}.` : "")
       : `Pronto. Substituí ${r.hits.length > 1 ? r.hits.length + " ficheiros de tema" : "o tema"} (${r.hits.map((h) => `<code>${esc(h.name)}</code>`).join(", ")}) pelo teu <code>.mtz</code>.`;
     setStatus("ok", `${done} Novo .bak: ${fmt(r.outBak.size)}.` +
