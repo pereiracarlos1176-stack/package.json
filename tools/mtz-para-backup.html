@@ -272,6 +272,7 @@ details[open] summary { margin-bottom: 8px; }
     return { ...entry, header: h, data };
   }
 
+  // Devolve um Blob para não juntar centenas de MB num só array.
   function buildTar(entries, trailer) {
     const parts = [];
     for (const e of entries) {
@@ -281,13 +282,72 @@ details[open] summary { margin-bottom: 8px; }
       if (padLen) parts.push(new Uint8Array(padLen));
     }
     parts.push(trailer.length ? trailer : new Uint8Array(1024));
-    return concat(parts);
+    return new Blob(parts);
   }
 
-  function concat(parts) {
-    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-    let o = 0; for (const p of parts) { out.set(p, o); o += p.length; }
-    return out;
+  function checksum(h) {
+    h.fill(32, 148, 156);
+    let sum = 0; for (const x of h) sum += x;
+    h.set(enc.encode(sum.toString(8).padStart(6, "0") + "\0 "), 148);
+  }
+
+  // Cabeçalho ustar novo, copiando modo/uid/gid/data de um ficheiro do próprio backup.
+  function newEntry(name, data, tplHeader) {
+    const h = new Uint8Array(tplHeader);
+    h.fill(0, 0, 100); h.fill(0, 157, 257); h.fill(0, 345, 500);
+    const nb = enc.encode(name);
+    if (nb.length <= 100) h.set(nb, 0);
+    else {
+      let cut = -1;
+      for (let i = 0; i < nb.length; i++) if (nb[i] === 47 && i <= 155 && nb.length - i - 1 <= 100) { cut = i; break; }
+      if (cut < 0) throw new Error("Caminho demasiado longo no backup: " + name);
+      h.set(nb.subarray(0, cut), 345); h.set(nb.subarray(cut + 1), 0);
+    }
+    h.set(enc.encode(data.length.toString(8).padStart(11, "0") + "\0"), 124);
+    h[156] = 48;
+    h.set(enc.encode("ustar\0" + "00"), 257);
+    checksum(h);
+    return { name, type: "0", size: data.length, header: h, data, meta: [] };
+  }
+
+  async function sha1(data) {
+    const d = new Uint8Array(await crypto.subtle.digest("SHA-1", data));
+    return Array.from(d, (x) => x.toString(16).padStart(2, "0")).join("");
+  }
+
+  // ---------- ZIP (sem compressão) ----------
+  const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  async function crc32(blob) {
+    let c = 0xffffffff;
+    const reader = blob.stream().getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (let i = 0; i < value.length; i++) c = CRC[(c ^ value[i]) & 0xff] ^ (c >>> 8);
+    }
+    return (c ^ 0xffffffff) >>> 0;
+  }
+  async function zipStore(files) {
+    const parts = [], central = [];
+    let offset = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name), crc = await crc32(f.blob), size = f.blob.size;
+      const lh = new DataView(new ArrayBuffer(30));
+      lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true);
+      lh.setUint16(10, 0, true); lh.setUint16(12, 0x21, true);
+      lh.setUint32(14, crc, true); lh.setUint32(18, size, true); lh.setUint32(22, size, true); lh.setUint16(26, name.length, true);
+      const ch = new DataView(new ArrayBuffer(46));
+      ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true);
+      ch.setUint16(14, 0x21, true); ch.setUint32(16, crc, true); ch.setUint32(20, size, true); ch.setUint32(24, size, true);
+      ch.setUint16(28, name.length, true); ch.setUint32(42, offset, true);
+      parts.push(lh, name, f.blob); central.push(ch, name);
+      offset += 30 + name.length + size;
+    }
+    const cdSize = central.reduce((n, p) => n + p.byteLength, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+    end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+    return new Blob([...parts, ...central, end], { type: "application/zip" });
   }
 
   // ---------- MTZ ----------
@@ -298,11 +358,12 @@ details[open] summary { margin-bottom: 8px; }
       const zip = await JSZip.loadAsync(bytes);
       const desc = zip.file(/(^|\/)description\.xml$/i)[0];
       const comps = Object.keys(zip.files).filter((n) => !n.includes("/") || /^[^/]+\/$/.test(n)).map((n) => n.replace(/\/$/, ""));
-      info = { comps, files: Object.values(zip.files).filter((f) => !f.dir).map((f) => ({ name: f.name, size: f._data && f._data.uncompressedSize })) };
+      info = { zip, comps, files: Object.values(zip.files).filter((f) => !f.dir).map((f) => ({ name: f.name, size: f._data && f._data.uncompressedSize })) };
       if (desc) {
         const xml = await desc.async("string");
         const tag = (t) => (xml.match(new RegExp(`<${t}>([^<]*)</${t}>`, "i")) || [])[1] || "";
-        info.title = tag("title"); info.designer = tag("designer") || tag("author"); info.version = tag("version"); info.uiVersion = tag("uiVersion");
+        info.title = tag("title"); info.designer = tag("designer") || tag("author"); info.author = tag("author") || info.designer;
+        info.version = tag("version"); info.uiVersion = tag("uiVersion"); info.description = tag("description");
       }
     } catch { /* não é zip: avisa mais abaixo */ }
     return { bytes, info };
@@ -348,27 +409,105 @@ details[open] summary { margin-bottom: 8px; }
 
     const hits = entries.filter((e) => e.type !== "5" && (/\.mtz$/i.test(e.name) || isThemePkg(e.data)));
     const base = { mtz, bak, entries, hits, folder };
-    if (!hits.length) return { ...base, ok: false };
+    let newEntries, hyper = null;
+    if (hits.length) {
+      newEntries = entries.map((e) => hits.includes(e) ? withData(e, mtz.bytes) : e);
+    } else if (entries.some((e) => /\/\.data\/meta\/theme\/[^/]+\.mrm$/.test(e.name))) {
+      hyper = await buildHyperOS(entries, mtz);
+      newEntries = hyper.entries;
+    } else {
+      return { ...base, ok: false };
+    }
 
-    const newEntries = entries.map((e) => hits.includes(e) ? withData(e, mtz.bytes) : e);
     let payload = buildTar(newEntries, trailer);
-    if (bak.compressed) payload = await pipe(payload, new CompressionStream("deflate"));
-    const outBak = concat([bak.head, payload]);
+    if (bak.compressed) payload = await new Response(payload.stream().pipeThrough(new CompressionStream("deflate"))).blob();
+    const outBak = new Blob([bak.head, payload]);
 
     let xmlText = null, xmlChanged = false;
     if (state.xml) {
       xmlText = await state.xml.text();
       const re = new RegExp(`(^|[^0-9])${bakBytes.length}(?![0-9])`, "g");
-      const replaced = xmlText.replace(re, `$1${outBak.length}`);
+      const replaced = xmlText.replace(re, `$1${outBak.size}`);
       xmlChanged = replaced !== xmlText; xmlText = replaced;
     }
 
-    const zip = new JSZip();
-    const dir = zip.folder(`MIUI/backup/AllBackup/${folder}`);
-    dir.file(state.bak.name, outBak);
-    if (xmlText !== null) dir.file(state.xml.name || "descript.xml", xmlText);
-    const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
-    return { ...base, ok: true, outBak, xmlText, xmlChanged, blob, zipName: `backup-tema-${folder}.zip` };
+    const dir = `MIUI/backup/AllBackup/${folder}/`;
+    const files = [{ name: dir + state.bak.name, blob: outBak }];
+    if (xmlText !== null) files.push({ name: dir + (state.xml.name || "descript.xml"), blob: new Blob([enc.encode(xmlText)]) });
+    const blob = await zipStore(files);
+    return { ...base, ok: true, hyper, outBak, xmlText, xmlChanged, blob, zipName: `backup-tema-${folder}.zip` };
+  }
+
+  // ---------- HyperOS: o tema fica desfeito em partes ----------
+  // .data/content/<código>/<id>.mrc  conteúdo de cada parte (o mesmo que está dentro do .mtz)
+  // .data/meta/<código>/<id>.mrm     ficha JSON de cada parte (hash SHA-1 e tamanho do .mrc)
+  // .data/meta/theme/<id>.mrm        ficha do tema, que lista as partes em subResources
+  // .data/preview/theme/<id>/        imagens de pré-visualização
+  const CODES = { "lockscreen": "lockstyle", "com.android.systemui": "statusbar", "com.miui.home": "launcher", "com.android.contacts": "contact", "com.android.mms": "mms", "framework-res": "framework" };
+
+  async function buildHyperOS(entries, mtz) {
+    const metaTheme = entries.filter((e) => /\/\.data\/meta\/theme\/[^/]+\.mrm$/.test(e.name));
+    const root = metaTheme[0].name.replace(/meta\/theme\/[^/]+$/, "");
+    const parseJson = (e) => { try { return JSON.parse(dec.decode(e.data)); } catch { return null; } };
+    const themeTpl = metaTheme.map(parseJson).filter(Boolean).sort((a, b) => Object.keys(b).length - Object.keys(a).length)[0];
+    const compTpl = entries.filter((e) => e.name.startsWith(root + "meta/") && !e.name.startsWith(root + "meta/theme/") && e.name.endsWith(".mrm"))
+      .map(parseJson).filter((j) => j && Array.isArray(j.parentResources) && j.parentResources.length)[0];
+    const tplEntry = entries.find((e) => e.name.startsWith(root + "content/")) || metaTheme[0];
+    if (!themeTpl || !compTpl) throw new Error("Não consegui ler as fichas dos temas do backup modelo.");
+
+    const info = mtz.info, zip = info.zip;
+    const themeId = crypto.randomUUID();
+    const platform = parseInt(info.uiVersion, 10) || themeTpl.platform;
+    const title = info.title || state.mtz.name.replace(/\.mtz$/i, "");
+    const author = info.author || info.designer || "";
+    const L = (v) => ({ fallback: v, pt_PT: v });
+
+    const parts = [], previews = [], skipped = [];
+    for (const f of Object.values(zip.files)) {
+      if (f.dir) continue;
+      const n = f.name;
+      let code = null;
+      if (!n.includes("/")) code = n === "description.xml" ? null : (CODES[n] || n);
+      else if (/^fonts\/[^/]+\.(ttf|otf)$/i.test(n)) code = parts.some((p) => p.code === "fonts") ? null : "fonts";
+      else if (/^wallpaper\/default_wallpaper\./i.test(n)) code = "wallpaper";
+      else if (/^wallpaper\/default_lock_wallpaper\./i.test(n)) code = "lockscreen";
+      else if (/^preview\/[^/]+\.(jpe?g|png|webp)$/i.test(n)) { previews.push({ name: n.slice(8), data: await f.async("uint8array") }); continue; }
+      if (!code) { if (n !== "description.xml") skipped.push(n); continue; }
+      const data = await f.async("uint8array");
+      parts.push({ code, id: crypto.randomUUID(), data, hash: await sha1(data), from: n });
+    }
+    if (!parts.length) throw new Error("Não encontrei partes de tema dentro do .mtz.");
+
+    const previewNames = previews.map((p) => p.name).sort();
+    const common = (o) => {
+      delete o.bought; delete o.check_bought;
+      return Object.assign(o, {
+        onlineId: null, productId: null, assemblyId: themeId, platform, updatedTime: 0, version: info.version || "1.0",
+        authors: L(author), designers: L(author), titles: L(title), descriptions: L(info.description || ""),
+        thumbnails: [], previews: [], extraMeta: {}, metaPath: null, contentPath: null, rightsPath: null, price: -1,
+      });
+    };
+
+    const out = [];
+    for (const p of parts) {
+      const m = common(JSON.parse(JSON.stringify(compTpl)));
+      const own = previewNames.filter((n) => n.startsWith(`preview_${p.code}_`));
+      Object.assign(m, { localId: p.id, hash: p.hash, size: p.data.length, builtInThumbnails: { fallback: own }, builtInPreviews: { fallback: own },
+        parentResources: [{ localId: themeId, resourceCode: "theme", extraMeta: {}, metaPath: null, contentPath: null }], subResources: [] });
+      out.push(newEntry(`${root}content/${p.code}/${p.id}.mrc`, p.data, tplEntry.header));
+      out.push(newEntry(`${root}meta/${p.code}/${p.id}.mrm`, enc.encode(JSON.stringify(m, null, 2)), tplEntry.header));
+    }
+    const t = common(JSON.parse(JSON.stringify(themeTpl)));
+    Object.assign(t, { localId: themeId, hash: await sha1(mtz.bytes), size: mtz.bytes.length, builtInThumbnails: { fallback: previewNames }, builtInPreviews: { fallback: previewNames },
+      parentResources: [], subResources: parts.map((p) => ({ localId: p.id, resourceCode: p.code, extraMeta: {}, metaPath: null, contentPath: null })) });
+    out.push(newEntry(`${root}meta/theme/${themeId}.mrm`, enc.encode(JSON.stringify(t, null, 2)), tplEntry.header));
+    for (const p of previews) out.push(newEntry(`${root}preview/theme/${themeId}/${p.name}`, p.data, tplEntry.header));
+
+    // Os ficheiros novos entram logo a seguir aos do tema que já existiam.
+    let at = -1;
+    entries.forEach((e, i) => { if (e.name.startsWith(root)) at = i; });
+    const merged = [...entries.slice(0, at + 1), ...out, ...entries.slice(at + 1)];
+    return { entries: merged, themeId, title, parts, previews, skipped };
   }
 
   function copyButton(id, text, doneLabel) {
@@ -420,8 +559,11 @@ details[open] summary { margin-bottom: 8px; }
       setStatus("bad", `Não encontrei nenhum ficheiro <code>.mtz</code> dentro do backup modelo, por isso não sei onde pôr o tema. Confirma que tinhas um tema da loja aplicado quando fizeste o backup. Se tinhas, carrega em <strong>Copiar lista em texto</strong> e cola-a na conversa com o Claude para eu ajustar a ferramenta.`);
       return;
     }
-    const where = r.hits.map((h) => `<code>${esc(h.name)}</code>`).join(", ");
-    setStatus("ok", `Pronto. Substituí ${r.hits.length > 1 ? r.hits.length + " ficheiros de tema" : "o tema"} (${where}) pelo teu <code>.mtz</code>. Novo .bak: ${fmt(r.outBak.length)}.` +
+    const done = r.hyper
+      ? `Pronto. Acrescentei o tema «${esc(r.hyper.title)}» ao backup no formato do HyperOS, com ${r.hyper.parts.length} partes (${r.hyper.parts.map((p) => esc(p.code)).join(", ")}) e ${r.hyper.previews.length} imagens de pré-visualização. Os temas que já lá estavam ficam como estavam.` +
+        (r.hyper.skipped.length ? `<br>Não incluí: ${r.hyper.skipped.map(esc).join(", ")}.` : "")
+      : `Pronto. Substituí ${r.hits.length > 1 ? r.hits.length + " ficheiros de tema" : "o tema"} (${r.hits.map((h) => `<code>${esc(h.name)}</code>`).join(", ")}) pelo teu <code>.mtz</code>.`;
+    setStatus("ok", `${done} Novo .bak: ${fmt(r.outBak.size)}.` +
       (r.xmlText === null ? `<br>Sem descript.xml: junta-o tu à pasta, copiado do backup modelo.` :
         r.xmlChanged ? `<br>Atualizei o tamanho no descript.xml.` : ``));
     $("save").hidden = false;
