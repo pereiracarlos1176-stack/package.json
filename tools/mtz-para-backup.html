@@ -413,7 +413,8 @@ details[open] summary { margin-bottom: 8px; }
     if (hits.length) {
       newEntries = entries.map((e) => hits.includes(e) ? withData(e, mtz.bytes) : e);
     } else if (entries.some((e) => /\/\.data\/meta\/theme\/[^/]+\.mrm$/.test(e.name))) {
-      hyper = await buildHyperOS(entries, mtz);
+      const hasFree = entries.some((e) => /\/\.data\/meta\/theme\/[^/]+\.mrm$/.test(e.name) && (() => { const j = parseJson(e); return j && j.productId && j.price === 0; })());
+      hyper = hasFree ? await buildReplace(entries, mtz) : await buildHyperOS(entries, mtz);
       newEntries = hyper.entries;
     } else {
       return { ...base, ok: false };
@@ -445,10 +446,100 @@ details[open] summary { margin-bottom: 8px; }
   // .data/preview/theme/<id>/        imagens de pré-visualização
   const CODES = { "lockscreen": "lockstyle", "com.android.systemui": "statusbar", "com.miui.home": "launcher", "com.android.contacts": "contact", "com.android.mms": "mms", "framework-res": "framework" };
 
+  const parseJson = (e) => { try { return JSON.parse(dec.decode(e.data)); } catch { return null; } };
+  const jsonBytes = (o) => enc.encode(JSON.stringify(o, null, 2));
+
+  async function collectParts(zip) {
+    const parts = [], previews = [], skipped = [];
+    for (const f of Object.values(zip.files)) {
+      if (f.dir) continue;
+      const n = f.name;
+      let code = null;
+      if (!n.includes("/")) code = n === "description.xml" ? null : (CODES[n] || n);
+      else if (/^fonts\/[^/]+\.(ttf|otf)$/i.test(n)) code = parts.some((p) => p.code === "fonts") ? null : "fonts";
+      else if (/^wallpaper\/default_wallpaper\./i.test(n)) code = "wallpaper";
+      else if (/^wallpaper\/default_lock_wallpaper\./i.test(n)) code = "lockscreen";
+      else if (/^preview\/[^/]+\.(jpe?g|png|webp)$/i.test(n)) { previews.push({ name: n.slice(8), data: await f.async("uint8array") }); continue; }
+      if (!code) { if (n !== "description.xml") skipped.push(n); continue; }
+      const data = await f.async("uint8array");
+      parts.push({ code, data, hash: await sha1(data), from: n });
+    }
+    return { parts, previews, skipped };
+  }
+
+  // O HyperOS só mostra temas com licença da loja. Este modo fica com a identidade e a licença de um tema
+  // gratuito já descarregado (ex.: iP27) e troca-lhe o conteúdo, as fichas e o nome pelos do .mtz.
+  async function buildReplace(entries, mtz) {
+    const metaTheme = entries.filter((e) => /\/\.data\/meta\/theme\/[^/]+\.mrm$/.test(e.name));
+    const root = metaTheme[0].name.replace(/meta\/theme\/[^/]+$/, "");
+    const themes = metaTheme.map((e) => ({ e, j: parseJson(e) })).filter((t) => t.j);
+    const target = themes.filter((t) => t.j.productId && t.j.price === 0 && (t.j.subResources || []).length)
+      .sort((a, b) => b.j.subResources.length - a.j.subResources.length)[0];
+    if (!target) throw new Error("O backup modelo não tem nenhum tema gratuito da loja. Descarrega um tema gratuito na app Temas e faz o backup outra vez.");
+
+    // Temas criados antes por esta página (sem licença) saem do backup.
+    const dropIds = new Set();
+    for (const t of themes) if (!t.j.productId && t.j.assemblyId === t.j.localId) {
+      dropIds.add(t.j.localId); for (const s of t.j.subResources || []) dropIds.add(s.localId);
+    }
+    let list = entries.filter((e) => ![...dropIds].some((id) => e.name.includes(id)));
+
+    const info = mtz.info, T = target.j;
+    const oldTitle = T.titles && (T.titles.zh_CN || T.titles.fallback);
+    const title = info.title || state.mtz.name.replace(/\.mtz$/i, "");
+    const author = info.author || info.designer || "";
+    const { parts, previews, skipped } = await collectParts(info.zip);
+    if (!parts.length) throw new Error("Não encontrei partes de tema dentro do .mtz.");
+    const previewNames = previews.map((p) => p.name).sort();
+    const byName = new Map(list.map((e, i) => [e.name, i]));
+    const tplEntry = list.find((e) => e.name.startsWith(root + "content/")) || target.e;
+    const compTpl = list.filter((e) => e.name.startsWith(root + "meta/") && !e.name.startsWith(root + "meta/theme/") && e.name.endsWith(".mrm"))
+      .map(parseJson).find((j) => j && (j.parentResources || []).some((p) => p.localId === T.localId));
+    const subByCode = new Map((T.subResources || []).map((s) => [s.resourceCode, s.localId]));
+    const added = [];
+    let replaced = 0;
+
+    const put = (name, data) => {
+      const i = byName.get(name);
+      if (i !== undefined) list[i] = withData(list[i], data);
+      else added.push(newEntry(name, data, tplEntry.header));
+    };
+
+    for (const p of parts) {
+      let id = subByCode.get(p.code), meta = null;
+      if (id) {
+        const me = list[byName.get(`${root}meta/${p.code}/${id}.mrm`)];
+        meta = me && parseJson(me);
+      }
+      if (!id || !meta) {
+        id = id || crypto.randomUUID();
+        meta = JSON.parse(JSON.stringify(compTpl || {}));
+        Object.assign(meta, { localId: id, onlineId: null, assemblyId: T.assemblyId, productId: T.productId, platform: T.platform, version: T.version,
+          parentResources: [{ localId: T.localId, resourceCode: "theme", extraMeta: {}, metaPath: null, contentPath: null }], subResources: [] });
+        if (!subByCode.has(p.code)) { T.subResources.push({ localId: id, resourceCode: p.code, extraMeta: {}, metaPath: null, contentPath: null }); subByCode.set(p.code, id); }
+      } else replaced++;
+      const own = previewNames.filter((n) => n.startsWith(`preview_${p.code}_`));
+      Object.assign(meta, { hash: p.hash, size: p.data.length, titles: { fallback: title, pt_PT: title }, authors: { fallback: author }, designers: { fallback: author },
+        descriptions: { fallback: info.description || "" }, builtInThumbnails: { fallback: own }, builtInPreviews: { fallback: own } });
+      put(`${root}content/${p.code}/${id}.mrc`, p.data);
+      put(`${root}meta/${p.code}/${id}.mrm`, jsonBytes(meta));
+    }
+
+    Object.assign(T, { titles: { fallback: title, pt_PT: title }, authors: { fallback: author }, designers: { fallback: author },
+      descriptions: { fallback: info.description || "", pt_PT: info.description || "" },
+      builtInThumbnails: { fallback: previewNames }, builtInPreviews: { fallback: previewNames }, previews: [], thumbnails: [] });
+    list[byName.get(target.e.name)] = withData(list[byName.get(target.e.name)], jsonBytes(T));
+    for (const p of previews) put(`${root}preview/theme/${T.localId}/${p.name}`, p.data);
+
+    let at = -1;
+    list.forEach((e, i) => { if (e.name.startsWith(root)) at = i; });
+    list = [...list.slice(0, at + 1), ...added, ...list.slice(at + 1)];
+    return { entries: list, mode: "replace", themeId: T.localId, oldTitle, title, parts, replaced, previews, skipped, dropped: dropIds.size };
+  }
+
   async function buildHyperOS(entries, mtz) {
     const metaTheme = entries.filter((e) => /\/\.data\/meta\/theme\/[^/]+\.mrm$/.test(e.name));
     const root = metaTheme[0].name.replace(/meta\/theme\/[^/]+$/, "");
-    const parseJson = (e) => { try { return JSON.parse(dec.decode(e.data)); } catch { return null; } };
     const themeTpl = metaTheme.map(parseJson).filter(Boolean).sort((a, b) => Object.keys(b).length - Object.keys(a).length)[0];
     const compTpl = entries.filter((e) => e.name.startsWith(root + "meta/") && !e.name.startsWith(root + "meta/theme/") && e.name.endsWith(".mrm"))
       .map(parseJson).filter((j) => j && Array.isArray(j.parentResources) && j.parentResources.length)[0];
@@ -565,7 +656,12 @@ details[open] summary { margin-bottom: 8px; }
       setStatus("bad", `Não encontrei nenhum ficheiro <code>.mtz</code> dentro do backup modelo, por isso não sei onde pôr o tema. Confirma que tinhas um tema da loja aplicado quando fizeste o backup. Se tinhas, carrega em <strong>Copiar lista em texto</strong> e cola-a na conversa com o Claude para eu ajustar a ferramenta.`);
       return;
     }
-    const done = r.hyper
+    const done = r.hyper && r.hyper.mode === "replace"
+      ? `Pronto. Usei a licença do tema da loja «${esc(r.hyper.oldTitle || "")}» e troquei-lhe o conteúdo pelo do teu tema. Vai aparecer em <strong>Os meus temas</strong> com o nome «${esc(r.hyper.title)}». ` +
+        `${r.hyper.replaced} partes substituídas, ${r.hyper.parts.length - r.hyper.replaced} partes novas, ${r.hyper.previews.length} imagens de pré-visualização.` +
+        (r.hyper.dropped ? ` Retirei o tema sem licença criado antes por esta página.` : "") +
+        (r.hyper.skipped.length ? `<br>Não incluí: ${r.hyper.skipped.map(esc).join(", ")}.` : "")
+      : r.hyper
       ? `Pronto. Acrescentei o tema «${esc(r.hyper.title)}» (id <code>${esc(r.hyper.themeId.slice(0, 8))}</code>) ao backup no formato do HyperOS, com ${r.hyper.parts.length} partes (${r.hyper.parts.map((p) => esc(p.code)).join(", ")}) e ${r.hyper.previews.length} imagens de pré-visualização. Os temas que já lá estavam ficam como estavam.` +
         (r.hyper.skipped.length ? `<br>Não incluí: ${r.hyper.skipped.map(esc).join(", ")}.` : "")
       : `Pronto. Substituí ${r.hits.length > 1 ? r.hits.length + " ficheiros de tema" : "o tema"} (${r.hits.map((h) => `<code>${esc(h.name)}</code>`).join(", ")}) pelo teu <code>.mtz</code>.`;
