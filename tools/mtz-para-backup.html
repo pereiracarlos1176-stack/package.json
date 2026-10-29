@@ -407,7 +407,7 @@ details[open] summary { margin-bottom: 8px; }
     catch { throw new Error("Não consegui descomprimir o backup. Envia-me a lista do passo 3 para eu ajustar a ferramenta."); }
     const { entries, trailer } = parseTar(tar);
 
-    const hits = entries.filter((e) => e.type !== "5" && !e.name.includes("/.data/content/") && (/\.mtz$/i.test(e.name) || isThemePkg(e.data)));
+    const hits = entries.filter((e) => e.type !== "5" && (/\.mtz$/i.test(e.name) || (!e.name.includes("/.data/content/") && isThemePkg(e.data))));
     const base = { mtz, bak, entries, hits, folder };
     let newEntries, hyper = null;
     if (hits.length) {
